@@ -17,6 +17,7 @@ import {
 import { auth, supabase } from '../components/authy';
 import AccountCircleIcon from '@mui/icons-material/AccountCircle';
 import AddCircleIcon from '@mui/icons-material/AddCircle';
+import ContentCopyRoundedIcon from '@mui/icons-material/ContentCopyRounded';
 import DeleteIcon from '@mui/icons-material/Delete';
 import EditIcon from '@mui/icons-material/Edit';
 import GroupIcon from '@mui/icons-material/Group';
@@ -24,6 +25,7 @@ import GeoApiAutocomplete from '../components/geoapi';
 import { Breadcrumb } from 'antd'; // Import Breadcrumb from Ant Design
 import { useNavigate } from 'react-router-dom';
 import { Link } from 'react-router-dom'; // Import Link for navigation
+import ReactCodesInput from "react-codes-input";
 
 import UpdateAccount from '../components/UpdateAccount';
 
@@ -69,7 +71,7 @@ const StatCard = styled(Paper)`
 export default function Dashboard() {
     const [loading, setLoading] = useState(false);
     const [modalStep, setModalStep] = useState(1);
-    const DEBUG_MODE_ACTIVE = false;
+    const DEBUG_MODE_ACTIVE = false; // Set to true to enable debug mode (prevents uploads)
     const [uploading, setUploading] = useState(false);
     const [selectedFile, setSelectedFile] = useState(null);
     const [uploadError, setUploadError] = useState('');
@@ -78,11 +80,13 @@ export default function Dashboard() {
     const [statsLoading, setStatsLoading] = useState(true);
     const [statsError, setStatsError] = useState('');
     const [modalOpen, setModalOpen] = useState(false);
+    const [pinValues, setPinValues] = useState(['', '', '', '', '', '']); // on form confirm, this is combined into a string and sent to profilePayload
     const navigate = useNavigate();
     const [formData, setFormData] = useState({
         email: '',
         password: '',
         uuid: '',
+        pin: '',
         firstname: '',
         middlename: '',
         lastname: '',
@@ -151,27 +155,29 @@ export default function Dashboard() {
         };
 
         checkUserSession(); // Call the function to check user session
-        async function fetchStats() {
-            setStatsLoading(true);
-            setStatsError('');
-            try {
-                const { count, error } = await supabase
-                    .from('users')
-                    .select('*', { count: 'exact', head: true });
-                if (error) throw error;
-                setUserCount(count);
-            } catch (err) {
-                setStatsError('Failed to load stats: ' + err.message);
-            } finally {
-                setStatsLoading(false);
-            }
-        }
-        fetchStats();
+
+        // async function fetchStats() {
+        //     setStatsLoading(true);
+        //     setStatsError('');
+        //     try {
+        //         const { count, error } = await supabase
+        //             .from('users')
+        //             .select('*', { count: 'exact', head: true });
+        //         if (error) throw error;
+        //         setUserCount(count);
+        //     } catch (err) {
+        //         setStatsError('Failed to load stats: ' + err.message);
+        //     } finally {
+        //         setStatsLoading(false);
+        //     }
+        // }
+        // fetchStats();
     }, []);
 
     const openCreateAccount = async () => {
         try {
-            const { email, password } = await auth.createNextUser();
+            
+            const { email, password } = await auth.createNextUser(); // This doesnt actually create the user yet, it generates the creds
             console.log('Generated credentials:', { email, password }); // please do not use the uuid from here, its auto generated slop and wont work
             
             setFormData(prev => ({
@@ -181,75 +187,71 @@ export default function Dashboard() {
             }));
             setModalOpen(true);
             
-            const credText = `Email: ${email}\nPassword: ${password}`;
+            const credText = `Email: ${email}\n
+                              Password: ${password}
+                            `;
             if (navigator.clipboard) {
                 await navigator.clipboard.writeText(credText);
                 console.log('Credentials copied to clipboard');
             }
+
+            formData.email = email;
+            formData.password = password; 
         } catch (err) {
             console.error('createNextUser failed:', err);
         }
     };
 
-    const completeClientSide = async (e) => {
-        setLoading(true);
-        setSubmitError('');
-        setUploadError('');
-        
-        try {
-            let context = await auth.sendToAuth(formData.email, formData.password);
-            if (!context) return;
-            
-            if (selectedFile && !formData.photo) {
-                console.log("Legacy error! You did a big fuck up");
-                throw new Error("Photo upload failed");
-            } else if (!selectedFile && !formData.photo) {
-                throw new Error("No photo provided");
-            }
-            
-            console.log("Submitting values to auth: ", context.user);
-            
-            const profilePayload = {
-                firstname: formData.firstname,
-                middlename: formData.middlename || " ",
-                lastname: formData.lastname,
-                pin: 111111,
-                email: formData.email,
-                password: formData.password,
-                uuid: context.user.id,
-                photo: formData.photo,
-                age: formData.age,
-                month: formData.month,
-                day: formData.day,
-                houseNumber: formData.houseNumber,
-                street: formData.street,
-                suburb: formData.suburb,
-                state: "QLD",
-                postCode: formData.postcode,
-                country: "AU",
-            };
-            
-            if (DEBUG_MODE_ACTIVE) {
-                console.log("[DEBUG_ACTIVE] Prevented upload for maintaince - Payload:", profilePayload);
-                return;
-            }
-            
-            const { data, error } = await supabase.from('users').insert([profilePayload]);
-            if (error) {
-                console.log("users table encountered an error: ", error.message);
-                throw error;
-            } else if (!error && data) {
-                console.log("Account created! Registered on Supabase users table:", data);
-            }
-        } catch (err) {
-            console.error('Error sending to auth:', err);
-            setModalOpen(true);
-            setLoading(false);
-            return;
-        } finally {
-            setLoading(false);
-            setModalOpen(false);
+    // PIN input handlers: keep pin values in state and mirror combined string into formData.pin
+    const handlePinChange = (index, value) => {
+        const digit = String(value).replace(/\D/g, '').slice(-1);
+        setPinValues(prev => {
+            const next = [...prev];
+            next[index] = digit || '';
+            // update combined pin into formData
+            const pinStr = next.join('');
+            setFormData(f => ({ ...f, pin: pinStr }));
+            return next;
+        });
+        // focus next input when a digit is entered
+        if (digit) {
+            const nextEl = document.getElementById(`pin-${index + 1}`);
+            if (nextEl) nextEl.focus();
         }
+    };
+
+    const handlePinPaste = (e) => {
+        e.preventDefault();
+        const paste = (e.clipboardData || window.clipboardData).getData('text') || '';
+        const digits = paste.replace(/\D/g, '').slice(0, pinValues.length).split('');
+        setPinValues(prev => {
+            const next = [...prev];
+            for (let i = 0; i < digits.length; i++) next[i] = digits[i];
+            const pinStr = next.join('');
+            setFormData(f => ({ ...f, pin: pinStr }));
+            return next;
+        });
+    };
+
+    // Handle backspace navigation: if current box empty, move left and clear previous
+    const handlePinKeyDown = (index, e) => {
+        if (e.key !== 'Backspace') return;
+        e.preventDefault();
+        setPinValues(prev => {
+            const next = [...prev];
+            if (next[index]) {
+                // clear current if it has a value
+                next[index] = '';
+            } else if (index > 0) {
+                // move to previous and clear it
+                next[index - 1] = '';
+                const prevEl = document.getElementById(`pin-${index - 1}`);
+                if (prevEl) prevEl.focus();
+            }
+            const pinStr = next.join('');
+            setFormData(f => ({ ...f, pin: pinStr }));
+            return next;
+        });
     };
 
     const handleSubmit = async (e) => {
@@ -261,49 +263,97 @@ export default function Dashboard() {
             setSubmitError(errMsg);
             return;
         }
-        
-        if (selectedFile && !formData.photo) {
-            try {
-                // Before anything, refreshSession to ensure valid auth state
-                await auth.refreshSession();
-                const fileExt = selectedFile.name.split('.').pop();
-                const fileName = `${formData.userId || 'user'}_${Date.now()}.${fileExt}`;
-                
-                if (DEBUG_MODE_ACTIVE) {
-                    console.log("[DEBUG_ACTIVE] File ready to be uploaded. Cancelling storage - Payload:", { fileExt, fileName });
-                    return;
-                }
-                
-                const { data: upData, error: upError } = await supabase.storage
-                    .from('user-images')
-                    .upload(fileName, selectedFile, { upsert: true });
-                if (upError) throw upError;
-                
-                const { data: urlData, error: urlError } = supabase.storage
-                    .from('user-images')
-                    .getPublicUrl(fileName);
-                if (urlError) throw urlError;
-                
-                setFormData(prev => ({ ...prev, photo: urlData.publicUrl }));
-            } catch (err) {
-                console.error("Upload error:", err);
-                setUploadError("Upload failed. Try again.");
-                return;
-            }
-        }
-        
+        // Validation passed — move to confirmation step. Actual upload and DB work
+        // will be performed in `handleFinalSubmit` to keep all data processing centralized.
         setModalStep(2);
     };
 
     const handleFinalSubmit = async () => {
+        // Centralized submission: upload photo (if needed), create auth user, then insert profile
         setLoading(true);
+        setSubmitError('');
+        setUploadError('');
+        // Keep the modal open while processing so the final success page can be shown.
+        // We render a global loading overlay while `loading` is true.
+
         try {
-            await completeClientSide();
-            setModalOpen(false);
-            setModalStep(3); // Change modal step to 3 for success page
+            // 1) If a photo file is selected but no public URL yet, upload it now
+            if (selectedFile && !formData.photo) {
+                try {
+                    const fileExt = selectedFile.name.split('.').pop();
+                    const fileName = `${formData.uuid || 'user'}_${Date.now()}.${fileExt}`;
+
+                    if (DEBUG_MODE_ACTIVE) {
+                        console.log("[DEBUG_ACTIVE] File ready to be uploaded. Cancelling storage - Payload:", { fileExt, fileName });
+                    } else {
+                        const { data: upData, error: upError } = await supabase.storage
+                            .from('user-images')
+                            .upload(fileName, selectedFile, { upsert: true });
+                        if (upError) throw upError;
+
+                        const { data: urlData, error: urlError } = supabase.storage
+                            .from('user-images')
+                            .getPublicUrl(fileName);
+                        if (urlError) throw urlError;
+
+                        setFormData(prev => ({ ...prev, photo: urlData.publicUrl }));
+                    }
+                } catch (err) {
+                    console.error('Upload error:', err);
+                    throw new Error('Photo upload failed: ' + (err?.message || String(err)));
+                }
+            }
+
+            console.log('Submitting values to auth...', formData);                
+
+            const profilePayload = {
+                firstname: formData.firstname,
+                middlename: formData.middlename || ' ',
+                lastname: formData.lastname,
+                pin: formData.pin,
+                email: formData.email,
+                password: formData.password,
+                // UUID: removed
+                // uuid is assigned via serverside code (createdUser.id)
+                photo: formData.photo,
+                age: formData.age,
+                month: formData.month,
+                day: formData.day,
+                houseNumber: formData.houseNumber,
+                street: formData.street,
+                suburb: formData.suburb,
+                state: 'QLD',
+                postCode: formData.postcode,
+                country: 'AU',
+            };
+
+            if (DEBUG_MODE_ACTIVE) {
+                console.log('[DEBUG_ACTIVE] Prevented upload for maintenance - Payload:', profilePayload);
+                setModalStep(3);
+                return;
+            }
+
+
+            const result = await auth.sendToAuth(formData.email, formData.password, profilePayload);
+            //function should return { user , insertResult, error}
+            const createdUser = result?.user || null;
+            const insertResult = result?.insertResult || null;
+            const insertError = result?.error || null;
+
+            if(!createdUser) throw new Error('User creation failed: No user returned from auth function.');
+
+            // remove client side insert to table for security reasons
+            if (insertResult?.error) {
+                console.log('Server-side insert error:', insertResult.error);
+                throw new Error(insertResult.error.message || 'Server failed to insert profile');
+            }
+
+            console.log('Account created! Registered on Supabase users table:', profilePayload, result);
+            setModalStep(3);
         } catch (err) {
-            console.error("Submission failed: ", err);
-            setSubmitError("Submission failed: " + err.message);
+            console.error('Error sending to auth:', err);
+            setModalOpen(true);
+            setSubmitError(err?.message || String(err));
         } finally {
             setLoading(false);
         }
@@ -400,10 +450,13 @@ export default function Dashboard() {
 
             <Modal
                 open={modalOpen}
-                onClose={() => {
+                // Prevent closing while loading; otherwise allow close/reset
+                onClose={(event, reason) => {
+                    if (loading) return; // ignore close attempts during processing
                     setModalOpen(false);
                     setModalStep(1);
                 }}
+                disableEscapeKeyDown={loading}
                 sx={{ display: 'flex', alignContent: 'center', justifyContent: 'center', overflow: 'auto' }}
             >
                 <Box sx={{
@@ -429,6 +482,29 @@ export default function Dashboard() {
                                 Password: {formData.password}
                             </Typography>
 
+                            <Typography sx={{ mt: 2 }} variant='h6'>PIN (6 digits)</Typography>
+                            <Box sx={{ display: 'flex', gap: 1, justifyContent: 'center', mt: 1 }} onPaste={handlePinPaste}>
+                                {pinValues.map((val, i) => (
+                                    <Input
+                                        key={i}
+                                        id={`pin-${i}`}
+                                        inputProps={{
+                                            maxLength: 1,
+                                            inputMode: 'numeric',
+                                            pattern: '[0-9]*',
+                                            style: { textAlign: 'center', fontSize: '1.1rem' }
+                                        }}
+                                        sx={{ width: '3rem' }}
+                                        value={val}
+                                        onChange={(e) => handlePinChange(i, e.target.value)}
+                                        onKeyDown={(e) => handlePinKeyDown(i, e)}
+                                        onFocus={(e) => e.target.select && e.target.select()}
+                                        variant="outlined"
+                                    />
+                                ))}
+                            </Box>
+                            
+
                             <Typography sx={{ mt: 2 }} variant='h5'>Name</Typography>
                             <TextField
                                 required
@@ -453,6 +529,8 @@ export default function Dashboard() {
                                 value={formData.lastname}
                                 onChange={(e) => setFormData(prev => ({ ...prev, lastname: e.target.value }))}
                             />
+
+
 
                             <Typography sx={{ mt: 2 }}>
                                 General Information
@@ -502,7 +580,7 @@ export default function Dashboard() {
                                     if (!place) {
                                         setFormData(prev => ({
                                             ...prev,
-                                            houseNumber: '',
+                                            houseNumber: '',              // PLEASE UPDATE TO ALLOW RAW INPUTS AND DETECTION ETC
                                             street: '',
                                             suburb: '',
                                             postcode: '',
@@ -630,11 +708,66 @@ export default function Dashboard() {
                             <Typography variant='body1'>
                                 Your account has been successfully created.
                             </Typography>
+                            <Box mt={3}>
+                                <Typography variant='h6' fontWeight={'bold'}>
+                                    Quick Actions
+                                </Typography>
+                                <div>
+                                    <Button variant="outlined" color="primary" sx={{ m: 1 }} onClick={() => {
+                                        setModalOpen(false);
+                                        setModalStep(1);
+                                    }}>
+                                        Create Another Account
+                                    </Button>
+                                    <Button variant="contained" color="primary" sx={{ m: 1 }} onClick={() => {
+                                        setModalOpen(false);
+                                        navigate('/dashboard'); // Go to home or dashboard
+                                    }}>
+                                        Go to Home
+                                    </Button>
+
+                                    <Button
+                                        variant="contained"
+                                        color="secondary"
+                                        sx={{ m: 1 }}   
+                                        onClick={async () => {
+                                            const credText = `Email: ${formData.email}\nPassword: ${formData.password}`;
+                                            if (navigator.clipboard) {
+                                                await navigator.clipboard.writeText(credText);
+                                                alert('Login info copied to clipboard');
+                                            } else {
+                                                alert('Clipboard API not supported');
+                                            }
+                                        }}
+                                    >
+                                        <ContentCopyRoundedIcon />
+                                        Copy Login info to Clipboard
+                                    </Button>
+
+
+                                    <Button >
+                                        Copy PayID info
+                                    </Button>
+                                </div>
+                            </Box>
+
                             <Button variant="contained" color="primary" onClick={() => setModalStep(1)}>
                                 Go to Dashboard
                             </Button>
                         </Box>
                     )}
+                </Box>
+            </Modal>
+
+            {/* Global loading overlay while processing final submit */}
+            <Modal
+                open={loading}
+                aria-labelledby="processing-title"
+                sx={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+            >
+                <Box sx={{ bgcolor: 'background.paper', p: 4, borderRadius: 2, textAlign: 'center', display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
+                    <CircularProgress size={48} />
+                    <Typography id="processing-title" sx={{ mt: 2 }}>Processing — please wait...</Typography>
                 </Box>
             </Modal>
 

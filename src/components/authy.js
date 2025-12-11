@@ -4,7 +4,7 @@ const supabaseUrl = process.env.REACT_APP_SUPABASE_URL
 const supabaseAnonKey = process.env.REACT_APP_SUPABASE_KEY
 
 if (!supabaseUrl || !supabaseAnonKey) {
-  console.warn('Missing Supabase environment variables. Make sure REACT_APP_SUPABASE_URL and REACT_APP_SUPABASE_ANON_KEY are set in .env')
+  console.warn('Missing Supabase environment variables. Make sure REACT_APP_SUPABASE_URL and REACT_APP_SUPABASE_KEY (or REACT_APP_SUPABASE_ANON_KEY) are set in .env')
 }
 export const supabase = createClient(supabaseUrl || '', supabaseAnonKey || '')
 
@@ -112,16 +112,51 @@ export const auth = {
     return { email: nextEmail, password: randomPassword };
   },
 
-  sendToAuth: async (email, password) => {
-    const { data, error } = await supabase.auth.signUp({
-      email,
-      password
-    });
-    if (error) throw error;
-    console.log("DATA IS EVERYWHERE", data);
-    return data;
+  sendToAuth: async (email, password, profile) => {
+    try {
+      const rawUrl = process.env.REACT_APP_SUPABASE_URL || '';
+      const anonKey = process.env.REACT_APP_SUPABASE_KEY || '';
+      if (!rawUrl || !anonKey) throw new Error('Supabase URL or anon key not configured.');
+
+      const base = rawUrl.replace(/^https?:\/\//, '').replace(/\/+$/, '');
+      const endpoint = `https://${base}/functions/v1/create-user`;
+
+      const res = await fetch(endpoint, {
+        method: "POST",
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${anonKey}`,
+        },
+        body: JSON.stringify({ email, password, profile }),
+      });
+
+      const text = await res.text();
+      let json = null;
+      try { json = text ? JSON.parse(text) : null; } catch (e) {
+        throw new Error(`Invalid JSON response from function: ${e.message} - ${text}`);
+      }
+
+      if (!res.ok) {
+        const msg = (json && (json.error || json.message)) || `Request failed with status ${res.status}`;
+        throw new Error(typeof msg === 'string' ? msg : JSON.stringify(msg));
+      }
+
+      // Support both shapes: { data: { user, insertResult } } and { user, insertResult }
+      const payload = json && json.data ? json.data : json;
+      const user = payload?.user || payload?.data?.user || null;
+      const insertResult = payload?.insertResult || payload?.data?.insertResult || null;
+
+      return { user, insertResult, raw: payload };
+    } catch (err) {
+      console.error('sendToAuth failed:', err);
+      if (err instanceof TypeError && err.message === 'Failed to fetch') {
+        throw new Error('Network request failed. Check your Supabase function URL and network connectivity.');
+      }
+      throw err;
+    }
   },
 
+  
   sendToBucket: async (filePath, file) => { // hit using auth.sendToBucket(`${file.name}`, file);
     console.log("[DEBUG] Uploading file, creds: ", filePath, file);
     const { data, error } = await supabase
